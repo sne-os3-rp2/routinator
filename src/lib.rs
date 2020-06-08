@@ -41,6 +41,7 @@ pub mod repository;
 pub mod rrdp;
 pub mod rtr;
 pub mod rsync;
+pub mod ipfs;
 pub mod slurm;
 pub mod utils;
 pub mod validity;

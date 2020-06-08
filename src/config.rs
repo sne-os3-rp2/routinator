@@ -21,6 +21,7 @@ use log::{LevelFilter, Log, error};
 #[cfg(unix)] use syslog::Facility;
 use tokio::runtime::Runtime;
 use crate::operation::Error;
+use crate::ipfs::IpfsPath;
 
 
 //------------ Defaults for Some Values --------------------------------------
@@ -112,6 +113,13 @@ pub struct Config {
     /// The command to run for rsync.
     pub rsync_command: String,
 
+    /// The command to run for ipfs.
+    pub ipfs_command: String,
+
+    /// The init location of ipfs
+    /// TODO DA change this to its own type
+    pub ipfs_path: PathBuf,
+
     /// Optional arguments passed to rsync.
     ///
     /// If these are present, they overide the arguments automatically
@@ -122,8 +130,11 @@ pub struct Config {
     /// Timeout for rsync commands.
     pub rsync_timeout: Duration,
 
-    /// Wether to disable RRDP.
+    /// Whether to disable RRDP.
     pub disable_rrdp: bool,
+
+    /// Whether to disable IPFS.
+    pub disable_ipfs: bool,
 
     /// Optional RRDP timeout in seconds.
     ///
@@ -281,6 +292,14 @@ impl Config {
         .arg(Arg::with_name("disable-rrdp")
             .long("disable-rrdp")
             .help("Disable RRDP and only use rsync")
+        )
+        .arg(Arg::with_name("disable-ipfs")
+                .long("disable-ipfs")
+                .help("Disable IPFS and only use rsync")
+        )
+        .arg(Arg::with_name("ipfs-path")
+                .long("ipfs-path")
+                .help("IPFS init directory")
         )
         .arg(Arg::with_name("rrdp-timeout")
             .long("rrdp-timeout")
@@ -551,6 +570,21 @@ impl Config {
         // disable_rrdp
         if matches.is_present("disable-rrdp") {
             self.disable_rrdp = true
+        }
+
+        // disable_ipfs
+        if matches.is_present("disable-ipfs") {
+            self.disable_ipfs = true
+        }
+
+        // ipfs_command
+        if let Some(value) = matches.value_of("ipfs-command") {
+            self.ipfs_command = value.into()
+        }
+
+        // ipfs path
+        if let Some(value) = matches.value_of("ipfs-path") {
+            self.ipfs_path = PathBuf::from(String::from(value))
         }
 
         // rrdp_timeout
@@ -962,6 +996,12 @@ impl Config {
                 )
             },
             disable_rrdp: file.take_bool("disable-rrdp")?.unwrap_or(false),
+            disable_ipfs: file.take_bool("disable-ipfs")?.unwrap_or(false),
+            ipfs_command: {
+                file.take_string("ipfs-command")?
+                    .unwrap_or_else(|| "rsync".into())
+            },
+            ipfs_path: file.take_mandatory_path("ipfs-path")?,
             rrdp_timeout: {
                 file.take_u64("rrdp-timeout")?
                 .map(|secs| {
@@ -1124,7 +1164,7 @@ impl Config {
     ///
     /// Uses default values for everything except for the cache and TAL
     /// directories which are provided.
-    fn default_with_paths(cache_dir: PathBuf, tal_dir: PathBuf) -> Self {
+    fn default_with_paths(cache_dir: PathBuf, tal_dir: PathBuf, ipfs_path: PathBuf) -> Self {
         Config {
             cache_dir,
             tal_dir,
@@ -1137,6 +1177,9 @@ impl Config {
             rsync_args: None,
             rsync_timeout: Duration::from_secs(DEFAULT_RSYNC_TIMEOUT),
             disable_rrdp: false,
+            disable_ipfs: false,
+            ipfs_command: "ipfs".into(),
+            ipfs_path,
             rrdp_timeout: None,
             rrdp_connect_timeout: None,
             rrdp_local_addr: None,
@@ -1300,6 +1343,9 @@ impl Config {
             (self.rsync_timeout.as_secs() as i64).into()
         );
         res.insert("disable-rrdp".into(), self.disable_rrdp.into());
+        res.insert("disable-ipfs".into(), self.disable_ipfs.into());
+        res.insert("ipfs-command".into(), self.ipfs_command.clone().into());
+        res.insert("ipfs-path".into(),    self.ipfs_path.display().to_string().into());
         if let Some(timeout) = self.rrdp_timeout {
             res.insert(
                 "rrdp-timeout".into(),
@@ -1421,12 +1467,13 @@ impl Default for Config {
                 let base = dir.join(".rpki-cache");
                 Config::default_with_paths(
                     base.join("repository"), 
-                    base.join("tals")
+                    base.join("tals"),
+                    dir.join("./ipfs")
                 )
             }
             None => {
                 Config::default_with_paths(
-                    PathBuf::from(""), PathBuf::from("")
+                    PathBuf::from(""), PathBuf::from(""), PathBuf::from("")
                 )
             }
         }

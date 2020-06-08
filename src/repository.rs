@@ -22,11 +22,12 @@ use rpki::manifest::{Manifest, ManifestContent, ManifestHash};
 use rpki::roa::{Roa, RoaStatus};
 use rpki::tal::{Tal, TalInfo, TalUri};
 use rpki::x509::ValidationError;
-use crate::{rrdp, rsync};
+use crate::{rrdp, rsync, ipfs};
 use crate::config::{Config, StalePolicy};
 use crate::metrics::Metrics;
 use crate::operation::Error;
 use crate::origins::{OriginsReport, RouteOrigins};
+use crate::ipfs::{IpnsPubkey, IpfsPath};
 
 
 //------------ Configuration -------------------------------------------------
@@ -68,6 +69,11 @@ pub struct Repository {
     /// If this is `None`, use of RRDP has been disable entirely.
     rsync: Option<rsync::Cache>,
 
+    /// The rsync cache.
+    ///
+    /// If this is `None`, use of IPFS has been disable entirely.
+    ipfs: Option<ipfs::Cache>,
+
     /// Should we leave the repository dirty after a valiation run.
     dirty_repository: bool,
 }
@@ -83,8 +89,19 @@ impl Repository {
             );
             return Err(Error);
         }
+
+        let ipfs_dir = config.cache_dir.join("ipfs");
+        if let Err(err) = fs::create_dir_all(&ipfs_dir) {
+            error!(
+                "Failed to create ipfs cache directory {}: {}.",
+                ipfs_dir.display(), err
+            );
+            return Err(Error);
+        }
+
         rsync::Cache::init(config)?;
         rrdp::Cache::init(config)?;
+        ipfs::Cache::init(config)?;
         Ok(())
     }
 
@@ -122,6 +139,7 @@ impl Repository {
             validation_threads: config.validation_threads,
             rrdp: rrdp::Cache::new(config, update)?,
             rsync: rsync::Cache::new( config, update)?,
+            ipfs: ipfs::Cache::new(config, update)?,
             dirty_repository: config.dirty_repository,
         })
     }
@@ -250,6 +268,7 @@ pub struct Run<'a> {
     repository: &'a Repository,
     rsync: Option<rsync::Run<'a>>,
     rrdp: Option<rrdp::Run<'a>>,
+    ipfs: Option<ipfs::Run<'a>>,
     metrics: Metrics,
 }
 
@@ -265,6 +284,12 @@ impl<'a> Run<'a> {
             },
             rrdp: if let Some(ref rrdp) = repository.rrdp { 
                 Some(rrdp.start()?)
+            }
+            else {
+                None
+            },
+            ipfs: if let Some(ref ipfs) = repository.ipfs {
+                Some(ipfs.start()?)
             }
             else {
                 None
@@ -389,11 +414,19 @@ impl<'a> Run<'a> {
         info: &TalInfo,
     ) -> Option<Cert> {
         match *uri {
+            // DA TODO update TAL to have the cid of certificate
             TalUri::Rsync(ref uri) => {
-                self.rsync.as_ref().and_then(|rsync| {
-                    rsync.load_module(uri);
+                self.ipfs.as_ref().and_then(|ipfs| {
+                    // rsync file
+                    ipfs.load_ta(uri);
                     self.load_file(None, uri)
                 })
+                // self.rsync.as_ref().and_then(|rsync| {
+                //     // rsync file
+                //     rsync.load_module(uri);
+                //     // return file
+                //     self.load_file(None, uri)
+                // })
             }
             TalUri::Https(ref uri) => {
                 self.rrdp.as_ref().and_then(|rrdp| rrdp.load_ta(uri, info))
@@ -414,7 +447,8 @@ impl<'a> Run<'a> {
                 }
             }
         }
-        self.rsync.as_ref().and_then(|rsync| rsync.load_file(uri))
+        // self.rsync.as_ref().and_then(|rsync| rsync.load_file(uri))
+        self.ipfs.as_ref().and_then(|ipfs| ipfs.load_file(uri))
     }
 
     /// Processes all data for the given trust CA.
@@ -441,9 +475,22 @@ impl<'a> Run<'a> {
             self.rrdp.as_ref().and_then(|rrdp| rrdp.load_server(uri))
         });
         if rrdp_server.is_none() {
-            if let Some(ref rsync) = self.rsync {
-                rsync.load_module(repo_uri)
-            }
+            // if let Some(ref rsync) = self.rsync {
+            //     rsync.load_module(repo_uri)
+            // }
+            // TODO Put this in an if elsee
+            if let Some(ref ipfs) = self.ipfs {
+                // TODO move the key to configuration
+                let ipns_pubkey = IpnsPubkey {
+                    key: String::from("QmcKcxt4cUwiA3CM1SLpGJLQpPYkuF6GWo6bsLLyt5cNuj")
+                };
+
+                let ipfs_path = IpfsPath {
+                    path: PathBuf::from("/Users/oluwadadepoaderemi/.ipfs")
+                };
+
+                ipfs.sync(&ipns_pubkey, &ipfs_path, repo_uri)
+            };
         }
         let (store, manifest) = match self.get_manifest(
             rrdp_server, &cert, uri, &repo_uri, routes,

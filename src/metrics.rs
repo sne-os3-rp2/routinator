@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use log::info;
 use rpki::uri;
 use rpki::tal::TalInfo;
+use crate::ipfs::Cid;
 
 
 //------------ Metrics -------------------------------------------------------
@@ -172,6 +173,15 @@ impl RrdpServerMetrics {
     }
 }
 
+
+//------------ IPFSModuleMetrics --------------------------------------------
+
+#[derive(Debug)]
+pub struct IpfsModuleMetrics {
+    pub cid: Cid, // TODO DA change to ipfs module
+    pub status: Result<process::ExitStatus, io::Error>,
+    pub duration: Result<Duration, SystemTimeError>,
+}
 
 //------------ RsyncModuleMetrics --------------------------------------------
 
