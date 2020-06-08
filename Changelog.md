@@ -1,10 +1,27 @@
 # Change Log
 
-## Unreleased next RC
+## Unreleased Future Version
+
+Breaking Changes
+
+New
 
 Bug Fixes
 
 Dependencies
+
+Other Changes
+
+* Update the AFRINIC TAL to include the HTTPS URI. ([#331])
+
+[#331]: https://github.com/NLnetLabs/routinator/pull/331
+
+
+## 0.7.0 ‘Your Time Starts … Now’
+
+Released 2020-05-06.
+
+There have been no changes since RC3.
 
 
 ## 0.7.0-rc3
