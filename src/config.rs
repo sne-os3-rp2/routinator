@@ -21,7 +21,7 @@ use log::{LevelFilter, Log, error};
 #[cfg(unix)] use syslog::Facility;
 use tokio::runtime::Runtime;
 use crate::operation::Error;
-use crate::ipfs::IpfsPath;
+use crate::ipfs::{IpfsPath, IpnsPubkey, Cid};
 
 
 //------------ Defaults for Some Values --------------------------------------
@@ -116,10 +116,6 @@ pub struct Config {
     /// The command to run for ipfs.
     pub ipfs_command: String,
 
-    /// The init location of ipfs
-    /// TODO DA change this to its own type
-    pub ipfs_path: PathBuf,
-
     /// Optional arguments passed to rsync.
     ///
     /// If these are present, they overide the arguments automatically
@@ -212,6 +208,13 @@ pub struct Config {
 
     /// A mapping of TAL file names to TAL labels.
     pub tal_labels: HashMap<String, String>,
+
+    pub ipns_pubkey: Option<IpnsPubkey>,
+
+    /// The init location of ipfs
+    pub ipfs_path: Option<IpfsPath>,
+
+    pub ipfs_ta_cer_cid: Option<Cid>,
 }
 
 
@@ -374,6 +377,10 @@ impl Config {
              .value_name("PATH")
              .help("Log to this file")
         )
+        .arg(Arg::with_name("ipns-pubkey")
+                .long("ipns-pubkey")
+                .help("Hash of IPNS public key to publish to")
+         )
     }
 
     /// Adds the relevant config args to the server subcommand.
@@ -584,7 +591,12 @@ impl Config {
 
         // ipfs path
         if let Some(value) = matches.value_of("ipfs-path") {
-            self.ipfs_path = PathBuf::from(String::from(value))
+            self.ipfs_path = Some(IpfsPath(PathBuf::from(value)))
+        }
+
+        // ta cid
+        if let Some(value) = matches.value_of("ipfs-ta-cer-cid") {
+            self.ipfs_ta_cer_cid = Some(Cid(String::from(value)))
         }
 
         // rrdp_timeout
@@ -1001,7 +1013,6 @@ impl Config {
                 file.take_string("ipfs-command")?
                     .unwrap_or_else(|| "rsync".into())
             },
-            ipfs_path: file.take_mandatory_path("ipfs-path")?,
             rrdp_timeout: {
                 file.take_u64("rrdp-timeout")?
                 .map(|secs| {
@@ -1069,6 +1080,11 @@ impl Config {
             user: file.take_string("user")?,
             group: file.take_string("group")?,
             tal_labels: file.take_string_map("tal-labels")?.unwrap_or_default(),
+            ipns_pubkey: file.take_string("ipns_pubkey").map(|res| res.map(|key| IpnsPubkey(key)))?,
+            ipfs_ta_cer_cid: file
+                .take_string("ipfs_ta_cer_cid")
+                .map(|res| res.map(|cid| Cid(cid)))?,
+            ipfs_path: file.take_mandatory_path("ipfs-path").map(|res| Some(IpfsPath(res)))?,
         };
         file.check_exhausted()?;
         Ok(res)
@@ -1164,7 +1180,7 @@ impl Config {
     ///
     /// Uses default values for everything except for the cache and TAL
     /// directories which are provided.
-    fn default_with_paths(cache_dir: PathBuf, tal_dir: PathBuf, ipfs_path: PathBuf) -> Self {
+    fn default_with_paths(cache_dir: PathBuf, tal_dir: PathBuf) -> Self {
         Config {
             cache_dir,
             tal_dir,
@@ -1179,7 +1195,6 @@ impl Config {
             disable_rrdp: false,
             disable_ipfs: false,
             ipfs_command: "ipfs".into(),
-            ipfs_path,
             rrdp_timeout: None,
             rrdp_connect_timeout: None,
             rrdp_local_addr: None,
@@ -1202,6 +1217,9 @@ impl Config {
             user: None,
             group: None,
             tal_labels: HashMap::new(),
+            ipfs_path: None,
+            ipns_pubkey: None,
+            ipfs_ta_cer_cid: None
         }
     }
 
@@ -1345,7 +1363,15 @@ impl Config {
         res.insert("disable-rrdp".into(), self.disable_rrdp.into());
         res.insert("disable-ipfs".into(), self.disable_ipfs.into());
         res.insert("ipfs-command".into(), self.ipfs_command.clone().into());
-        res.insert("ipfs-path".into(),    self.ipfs_path.display().to_string().into());
+
+        if let Some(ref ipfs_path) = self.ipfs_path {
+            res.insert("ipfs-path".into(), ipfs_path.value().display().to_string().into());
+        }
+
+        if let Some(ref ipfs_ta_cer_cid) = self.ipfs_ta_cer_cid {
+            res.insert("ipfs-ta-cer-cid".into(), ipfs_ta_cer_cid.to_string().into());
+        }
+
         if let Some(timeout) = self.rrdp_timeout {
             res.insert(
                 "rrdp-timeout".into(),
@@ -1467,13 +1493,12 @@ impl Default for Config {
                 let base = dir.join(".rpki-cache");
                 Config::default_with_paths(
                     base.join("repository"), 
-                    base.join("tals"),
-                    dir.join("./ipfs")
+                    base.join("tals")
                 )
             }
             None => {
                 Config::default_with_paths(
-                    PathBuf::from(""), PathBuf::from(""), PathBuf::from("")
+                    PathBuf::from(""), PathBuf::from("")
                 )
             }
         }

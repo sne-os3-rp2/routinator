@@ -11,20 +11,37 @@ use rpki::uri;
 use crate::metrics::IpfsModuleMetrics;
 use std::time::SystemTime;
 
-#[derive(Clone, Debug)]
-pub struct IpnsPubkey {
-    pub key: String
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IpnsPubkey(pub String);
+impl IpnsPubkey {
+    pub fn value(&self) -> &String {
+        &self.0
+    }
+}
+
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IpfsPath(pub PathBuf);
+impl IpfsPath {
+    pub fn value(&self) -> &PathBuf {
+        &self.0
+    }
+
+    pub fn to_string(&self) -> String {
+        String::from(&self.0.display().to_string())
+    }
 }
 
 #[derive(Clone, Debug)]
-pub struct IpfsPath {
-    pub path: PathBuf
+pub struct Cid(pub String);
+
+impl Cid {
+    pub fn to_string(&self) -> String {
+        String::from(&self.0)
+    }
 }
 
-#[derive(Clone, Debug)]
-pub struct Cid {
-    pub value: String
-}
+
 
 #[derive(Debug)]
 pub struct Cache {
@@ -33,8 +50,13 @@ pub struct Cache {
 
 
     /// The backing storage of ipfs.
-    /// TODO change this to its own type
-    ipfs_path: PathBuf,
+    ipfs_path: Option<IpfsPath>,
+
+    /// Hash of ipns public key to publish to
+    ipns_pubkey: Option<IpnsPubkey>,
+
+    /// CID of ta cer
+    ipfs_ta_cer_cid: Option<Cid>,
 
     /// The command for running ipfs.
     ///
@@ -69,14 +91,27 @@ impl Cache {
                 } else {
                     None
                 },
-                // TODO DA is it necessary to create a new IpfsPath?
-                ipfs_path: PathBuf::from(config.ipfs_path.clone())
+                ipfs_path: config.ipfs_path.clone(),
+                ipns_pubkey: config.ipns_pubkey.clone(),
+                ipfs_ta_cer_cid: config.ipfs_ta_cer_cid.clone()
             }))
         }
     }
 
     pub fn start(&self) -> Result<Run, Error> {
         Run::new(self)
+    }
+
+    pub fn ipfs_path(&self) -> Option<IpfsPath> {
+        self.ipfs_path.clone()
+    }
+
+    pub fn ipns_pubkey(&self) -> Option<IpnsPubkey> {
+        self.ipns_pubkey.clone()
+    }
+
+    pub fn ipfs_ta_cer_cid(&self) -> Option<Cid> {
+        self.ipfs_ta_cer_cid.clone()
     }
 
     fn cache_dir(config: &Config) -> PathBuf {
@@ -133,19 +168,22 @@ impl<'a> Run<'a>  {
         })
     }
 
+    pub fn cache(&self) -> &Cache {
+        self.cache
+    }
+
     pub fn sync(&self, public_key: &IpnsPubkey, ipfs_path: &IpfsPath, uri: &uri::Rsync) {
         println!("Starting syncing IPFS...");
-        env::set_var("IPFS_PATH", ipfs_path.path.as_os_str());
+        env::set_var("IPFS_PATH", ipfs_path.to_string());
 
-        let source = format!("/ipns/{}", &public_key.key);
+
+        let source = format!("/ipns/{}", &public_key.value());
 
         let module = uri.module();
         let destination = &self.cache.base_dir.module_path(module);
 
         let destination = format!("--output={}", destination.display().to_string());
 
-        //let destination = String::from("/Users/oluwadadepoaderemi/.rpki-cache/repository/ipfs");
-        // TODO DA this is repeated. extract
         let result = std::process::Command::new("ipfs")
             .arg("get")
             .arg(source)
@@ -164,8 +202,11 @@ impl<'a> Run<'a>  {
         };
         let module = uri.module();
 
-        // TODO DA move cid to config
-        let ta_cer_cid = Cid { value: String::from("QmeHrf3ErtjSrcsk9YQTQE1JiwGhgp5MwUqnVWtu5VRuA2")};
+        // TODO DA maybe improve by not using expect
+        let ta_cer_cid = match self.cache.ipfs_ta_cer_cid.as_ref() {
+            Some(ipfs_ta_cer_cid) => ipfs_ta_cer_cid,
+            None => return,
+        };
 
         // If it is already up-to-date, return.
         if self.updated.read().unwrap().contains(module) {
@@ -257,7 +298,7 @@ impl Command {
 
     pub fn update(
         &self,
-        source: Cid,
+        source: &Cid,
         destination: &Path
     ) -> IpfsModuleMetrics {
         let start = SystemTime::now();
@@ -282,7 +323,7 @@ impl Command {
         source: &Cid,
         destination: &Path
     ) -> Result<process::Command, io::Error> {
-        info!("ipfs retrieve cid: {}.", source.value);
+        info!("ipfs retrieve cid: {}.", source.to_string());
         fs::create_dir_all(destination)?;
         let destination = match Self::format_destination(destination) {
             Ok(some) => some,
@@ -302,7 +343,7 @@ impl Command {
         let destination = format!("--output={}ta.cer", destination);
 
         cmd.arg("get")
-            .arg(source.value.clone())
+            .arg(source.to_string().clone())
             .arg(destination);
         info!(
             "ipfs Running command {:?}", cmd
@@ -318,13 +359,13 @@ impl Command {
         if !output.status.success() {
             warn!(
                 "ipfs to retrieve cid {} failed with status {}",
-                source.value, output.status
+                source.to_string(), output.status
             );
         }
         else {
             info!(
                 "successfully completed {}.",
-                source.value,
+                source.to_string(),
             );
         }
         // if !output.stderr.is_empty() {

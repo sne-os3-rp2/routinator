@@ -416,17 +416,17 @@ impl<'a> Run<'a> {
         match *uri {
             // DA TODO update TAL to have the cid of certificate
             TalUri::Rsync(ref uri) => {
+                // If IPFS is configured, used that, if not fall back to rsync
                 self.ipfs.as_ref().and_then(|ipfs| {
                     // rsync file
                     ipfs.load_ta(uri);
                     self.load_file(None, uri)
-                })
-                // self.rsync.as_ref().and_then(|rsync| {
-                //     // rsync file
-                //     rsync.load_module(uri);
-                //     // return file
-                //     self.load_file(None, uri)
-                // })
+                }).or(self.rsync.as_ref().and_then(|rsync| {
+                    // rsync file
+                    rsync.load_module(uri);
+                    // return file
+                    self.load_file(None, uri)
+                }))
             }
             TalUri::Https(ref uri) => {
                 self.rrdp.as_ref().and_then(|rrdp| rrdp.load_ta(uri, info))
@@ -447,8 +447,10 @@ impl<'a> Run<'a> {
                 }
             }
         }
-        // self.rsync.as_ref().and_then(|rsync| rsync.load_file(uri))
-        self.ipfs.as_ref().and_then(|ipfs| ipfs.load_file(uri))
+        // load file from ipfs cache, fall back to rsync cache
+        self.ipfs.as_ref()
+            .and_then(|ipfs| ipfs.load_file(uri))
+            .or(self.rsync.as_ref().and_then(|rsync| rsync.load_file(uri)))
     }
 
     /// Processes all data for the given trust CA.
@@ -475,22 +477,15 @@ impl<'a> Run<'a> {
             self.rrdp.as_ref().and_then(|rrdp| rrdp.load_server(uri))
         });
         if rrdp_server.is_none() {
-            // if let Some(ref rsync) = self.rsync {
-            //     rsync.load_module(repo_uri)
-            // }
-            // TODO Put this in an if elsee
-            if let Some(ref ipfs) = self.ipfs {
-                // TODO move the key to configuration
-                let ipns_pubkey = IpnsPubkey {
-                    key: String::from("QmcKcxt4cUwiA3CM1SLpGJLQpPYkuF6GWo6bsLLyt5cNuj")
-                };
-
-                let ipfs_path = IpfsPath {
-                    path: PathBuf::from("/Users/oluwadadepoaderemi/.ipfs")
-                };
-
-                ipfs.sync(&ipns_pubkey, &ipfs_path, repo_uri)
-            };
+            // use ipfs, fall back to rsync
+            self.ipfs.as_ref()
+                .map(|ipfs| {
+                    let ipns_pubkey = ipfs.cache().ipns_pubkey().expect("ipns key not provided");
+                    let ipfs_path = ipfs.cache().ipfs_path().expect("ipfs path not provided");
+                    ipfs.sync(&ipns_pubkey, &ipfs_path, repo_uri)
+                }).or(self.rsync.as_ref().map(|rsync| {
+                rsync.load_module(repo_uri)
+            }));
         }
         let (store, manifest) = match self.get_manifest(
             rrdp_server, &cert, uri, &repo_uri, routes,
