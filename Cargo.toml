@@ -29,8 +29,8 @@ num_cpus        = "1.12.0"
 rand            = "0.7.3"
 reqwest         = { version = "0.10.4", default-features = false, features = ["blocking"] }
 ring            = "0.16.12"
-#rpki            = {  git = "https://github.com/sne-os3-rp2/rpki-rs" }
-rpki            = { path = "/Users/oluwadadepoaderemi/Documents/masters/rp2/rpki-rs"}
+rpki            = {  git = "https://github.com/sne-os3-rp2/rpki-rs" }
+#rpki            = { path = "/Users/oluwadadepoaderemi/Documents/masters/rp2/rpki-rs"}
 rpki-rtr        = "0.1.1"
 slab            = "0.4.2"
 tempfile        = "3.1.0"
