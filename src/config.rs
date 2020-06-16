@@ -21,7 +21,7 @@ use log::{LevelFilter, Log, error};
 #[cfg(unix)] use syslog::Facility;
 use tokio::runtime::Runtime;
 use crate::operation::Error;
-use crate::ipfs::{IpfsPath, IpnsPubkey, TalPubkey, KeyName};
+use crate::ipfs::IpfsPath;
 
 
 //------------ Defaults for Some Values --------------------------------------
@@ -209,14 +209,8 @@ pub struct Config {
     /// A mapping of TAL file names to TAL labels.
     pub tal_labels: HashMap<String, String>,
 
-    pub ipns_pubkey: Option<IpnsPubkey>,
-
     /// The init location of ipfs
     pub ipfs_path: Option<IpfsPath>,
-
-    pub tal_pubkey: Option<TalPubkey>,
-
-    pub tal_keyname: Option<KeyName>
 }
 
 
@@ -602,21 +596,6 @@ impl Config {
         // ipfs path
         if let Some(value) = matches.value_of("ipfs-path") {
             self.ipfs_path = Some(IpfsPath(PathBuf::from(value)))
-        }
-
-        // ipns
-        if let Some(value) = matches.value_of("ipns-pubkey") {
-            self.ipns_pubkey = Some(IpnsPubkey(String::from(value)))
-        }
-
-        // tal_pubkey
-        if let Some(value) = matches.value_of("tal-pubkey") {
-            self.tal_pubkey = Some(TalPubkey(String::from(value)))
-        }
-
-        // tal_keyname
-        if let Some(value) = matches.value_of("tal-keyname") {
-            self.tal_keyname = Some(KeyName(String::from(value)))
         }
 
         // rrdp_timeout
@@ -1100,12 +1079,7 @@ impl Config {
             user: file.take_string("user")?,
             group: file.take_string("group")?,
             tal_labels: file.take_string_map("tal-labels")?.unwrap_or_default(),
-            ipns_pubkey: file.take_string("ipns-pubkey").map(|res| res.map(|key| IpnsPubkey(key)))?,
             ipfs_path: file.take_mandatory_path("ipfs-path").map(|res| Some(IpfsPath(res)))?,
-            tal_pubkey: file.take_string("tal-pubkey").map(|res| res.map(|key| TalPubkey(key)))?,
-            tal_keyname: file
-                .take_string("tal-keyname")
-                .map(|res| res.map(|name| KeyName(name)))?
         };
         file.check_exhausted()?;
         Ok(res)
@@ -1238,10 +1212,7 @@ impl Config {
             user: None,
             group: None,
             tal_labels: HashMap::new(),
-            ipfs_path: None,
-            ipns_pubkey: None,
-            tal_pubkey: None,
-            tal_keyname: None
+            ipfs_path: None
         }
     }
 
@@ -1388,18 +1359,6 @@ impl Config {
 
         if let Some(ref ipfs_path) = self.ipfs_path {
             res.insert("ipfs-path".into(), ipfs_path.value().display().to_string().into());
-        }
-
-        if let Some(ref ipns_pubkey) = self.ipns_pubkey {
-            res.insert("ipns-pubkey".into(), ipns_pubkey.value().to_string().into());
-        }
-
-        if let Some(ref tal_pubkey) = self.tal_pubkey {
-            res.insert("tal-pubkey".into(), tal_pubkey.value().to_string().into());
-        }
-
-        if let Some(ref tal_keyname) = self.tal_keyname {
-            res.insert("tal-keyname".into(), tal_keyname.to_string().into());
         }
 
         if let Some(timeout) = self.rrdp_timeout {

@@ -64,9 +64,6 @@ pub struct Cache {
     /// The backing storage of ipfs.
     ipfs_path: Option<IpfsPath>,
 
-    /// Hash of ipns public key to publish to
-    ipns_pubkey: Option<IpnsPubkey>,
-
     /// The command for running ipfs.
     ///
     /// If this is `None` actual ipfs has been disabled.
@@ -100,8 +97,7 @@ impl Cache {
                 } else {
                     None
                 },
-                ipfs_path: config.ipfs_path.clone(),
-                ipns_pubkey: config.ipns_pubkey.clone()
+                ipfs_path: config.ipfs_path.clone()
             }))
         }
     }
@@ -112,10 +108,6 @@ impl Cache {
 
     pub fn ipfs_path(&self) -> Option<IpfsPath> {
         self.ipfs_path.clone()
-    }
-
-    pub fn ipns_pubkey(&self) -> Option<IpnsPubkey> {
-        self.ipns_pubkey.clone()
     }
 
     pub fn local_repo_dir(&self, uri: &uri::Ipns) -> PathBuf {
