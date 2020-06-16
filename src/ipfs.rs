@@ -5,7 +5,6 @@ use std::{fs, env, io, process};
 use log::{error, info, warn};
 use std::sync::{RwLock, Mutex, Arc};
 use std::collections::{HashSet, HashMap};
-use std::process::Output;
 use bytes::Bytes;
 use rpki::uri;
 use crate::metrics::IpfsModuleMetrics;
@@ -21,6 +20,14 @@ impl IpnsPubkey {
 
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TalPubkey(pub String);
+impl TalPubkey {
+    pub fn value(&self) -> &String {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpfsPath(pub PathBuf);
 impl IpfsPath {
     pub fn value(&self) -> &PathBuf {
@@ -34,13 +41,19 @@ impl IpfsPath {
 
 #[derive(Clone, Debug)]
 pub struct Cid(pub String);
-
 impl Cid {
     pub fn to_string(&self) -> String {
         String::from(&self.0)
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct KeyName(pub String);
+impl KeyName {
+    pub fn to_string(&self) -> String {
+        String::from(&self.0)
+    }
+}
 
 
 #[derive(Debug)]
@@ -48,15 +61,11 @@ pub struct Cache {
     /// The base directory of the cache.
     base_dir: CacheDir,
 
-
     /// The backing storage of ipfs.
     ipfs_path: Option<IpfsPath>,
 
     /// Hash of ipns public key to publish to
     ipns_pubkey: Option<IpnsPubkey>,
-
-    /// CID of ta cer
-    ipfs_ta_cer_cid: Option<Cid>,
 
     /// The command for running ipfs.
     ///
@@ -92,8 +101,7 @@ impl Cache {
                     None
                 },
                 ipfs_path: config.ipfs_path.clone(),
-                ipns_pubkey: config.ipns_pubkey.clone(),
-                ipfs_ta_cer_cid: config.ipfs_ta_cer_cid.clone()
+                ipns_pubkey: config.ipns_pubkey.clone()
             }))
         }
     }
@@ -110,8 +118,16 @@ impl Cache {
         self.ipns_pubkey.clone()
     }
 
-    pub fn ipfs_ta_cer_cid(&self) -> Option<Cid> {
-        self.ipfs_ta_cer_cid.clone()
+    pub fn local_repo_dir(&self, uri: &uri::Ipns) -> PathBuf {
+        let mut res = self.base_dir.base.clone();
+        res.push(uri.get_repo_publish_key());
+        res
+    }
+
+    pub fn local_ta_cer_dir(&self, uri: &uri::Ipns) -> PathBuf {
+        let mut res = self.base_dir.base.clone();
+        res.push(uri.get_ta_publish_key());
+        res
     }
 
     fn cache_dir(config: &Config) -> PathBuf {
@@ -130,19 +146,6 @@ struct CacheDir {
 impl CacheDir {
     fn new(base: PathBuf) -> Self {
         CacheDir { base }
-    }
-
-    fn module_path(&self, module: &uri::RsyncModule) -> PathBuf {
-        let mut res = self.base.clone();
-        res.push(module.authority());
-        res.push(module.module());
-        res
-    }
-
-    fn uri_path(&self, uri: &uri::Rsync) -> PathBuf {
-        let mut res = self.module_path(uri.module());
-        res.push(uri.path());
-        res
     }
 }
 
@@ -172,15 +175,13 @@ impl<'a> Run<'a>  {
         self.cache
     }
 
-    pub fn sync(&self, public_key: &IpnsPubkey, ipfs_path: &IpfsPath, uri: &uri::Rsync) {
+    pub fn sync(&self, ipfs_path: &IpfsPath, uri: &uri::Ipns) {
         println!("Starting syncing IPFS...");
         env::set_var("IPFS_PATH", ipfs_path.to_string());
 
+        let source = format!("/ipns/{}", &uri.get_repo_publish_key());
 
-        let source = format!("/ipns/{}", &public_key.value());
-
-        let module = uri.module();
-        let destination = &self.cache.base_dir.module_path(module);
+        let destination = &self.cache.local_repo_dir(uri);
 
         let destination = format!("--output={}", destination.display().to_string());
 
@@ -188,66 +189,68 @@ impl<'a> Run<'a>  {
             .arg("get")
             .arg(source)
             .arg(destination)
-            .output().expect("gbege");
+            .output().expect("could not sync ipfs");
 
         println!("Finished syncing IPFS...");
         env::set_var("IPFS_PATH", "");
         println!("{:?}", result);
     }
 
-    pub fn load_ta(&self, uri: &uri::Rsync) {
+    pub fn load_ta(&self, uri: &uri::Ipns) {
         let command = match self.cache.command.as_ref() {
             Some(command) => command,
             None => return,
         };
-        let module = uri.module();
-
-        // TODO DA maybe improve by not using expect
-        let ta_cer_cid = match self.cache.ipfs_ta_cer_cid.as_ref() {
-            Some(ipfs_ta_cer_cid) => ipfs_ta_cer_cid,
-            None => return,
-        };
-
-        // If it is already up-to-date, return.
-        if self.updated.read().unwrap().contains(module) {
-            return
-        }
-
-        // Get a clone of the (arc-ed) mutex. Make a new one if there isn’t
-        // yet.
-        let mutex = {
-            self.running.write().unwrap()
-                .entry(module.clone()).or_default()
-                .clone()
-        };
-
-        // Acquire the mutex. Once we have it, see if the module is up-to-date
-        // which happens if someone else had it first.
-        let _lock = mutex.lock().unwrap();
-        if self.updated.read().unwrap().contains(module) {
-            return
-        }
 
         // Run the actual update.
-        let metrics = command.update(
-            ta_cer_cid, &self.cache.base_dir.module_path(module)
+        let metrics = command.fetch_ta_cer_to_local(
+            uri, &self.cache
         );
 
         // Insert into updated map and metrics.
         self.metrics.lock().unwrap().push(metrics);
-
-        // Insert into updated map no matter what.
-        self.updated.write().unwrap().insert(module.clone());
-
-        // Remove from running.
-        self.running.write().unwrap().remove(module);
     }
 
-    pub fn load_file(
+    pub fn do_load_file_from_cache(&self, rsync_uri: &uri::Rsync, ipns_uri: &uri::Ipns) -> Option<Bytes> {
+        let source = self.cache
+            .base_dir
+            .base
+            .join(&rsync_uri.to_ipns_repo_path(ipns_uri));
+
+        match fs::File::open(&source) {
+            Ok(mut file) => {
+                let mut data = Vec::new();
+                if let Err(err) = io::Read::read_to_end(&mut file, &mut data) {
+                    warn!(
+                        "Failed to read file '{}': {}",
+                        source.display(),
+                        err
+                    );
+                    None
+                }
+                else {
+                    Some(data.into())
+                }
+            }
+            Err(err) => {
+                if err.kind() == io::ErrorKind::NotFound {
+                    info!("{}: not found in local ipfs repository", source.display());
+                } else {
+                    warn!(
+                        "Failed to open file '{}': {}",
+                        source.display(), err
+                    );
+                }
+                None
+            }
+        }
+    }
+
+    pub fn load_ta_file_from_cache(
         &self,
-        uri: &uri::Rsync,
+        uri: &uri::Ipns,
     ) -> Option<Bytes> {
-        let path = self.cache.base_dir.uri_path(uri);
+        let path = self.cache.local_ta_cer_dir(uri).join("ta.cer");
         match fs::File::open(&path) {
             Ok(mut file) => {
                 let mut data = Vec::new();
@@ -296,76 +299,68 @@ impl Command {
         })
     }
 
-    pub fn update(
+    pub fn fetch_ta_cer_to_local(
         &self,
-        source: &Cid,
-        destination: &Path
+        source: &uri::Ipns,
+        destination: &Cache
     ) -> IpfsModuleMetrics {
         let start = SystemTime::now();
         let status = {
-            match self.command(&source, destination) {
+            match self.fetch_ta_cer(&source, destination) {
                 Ok(mut command) => match command.output() {
-                    Ok(output) => Ok(Self::log_output(&source, output)),
+                    Ok(output) => Ok(Self::log_output(&source.as_str().to_string(), output)),
                     Err(err) => Err(err)
                 }
                 Err(err) => Err(err)
             }
         };
         IpfsModuleMetrics {
-            cid: source.clone(),
+            ipns: source.clone(),
             status,
             duration: SystemTime::now().duration_since(start),
         }
     }
 
-    fn command(
+    // TODO DA Check destination - should be in the directory created for the repo
+    // TODO DA check if this can be reused for fetching the repo
+    fn fetch_ta_cer(
         &self,
-        source: &Cid,
-        destination: &Path
+        source: &uri::Ipns,
+        cache: &Cache
     ) -> Result<process::Command, io::Error> {
-        info!("ipfs retrieve cid: {}.", source.to_string());
-        fs::create_dir_all(destination)?;
-        let destination = match Self::format_destination(destination) {
-            Ok(some) => some,
-            Err(_) => {
-                error!(
-                    "ipfs: illegal destination path {}.",
-                    destination.display()
-                );
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "illegal destination path"
-                ));
-            }
-        };
+        let destination = cache.local_ta_cer_dir(source);
+        fs::create_dir_all(&destination)?;
+
         let mut cmd = process::Command::new(&self.command);
 
-        let destination = format!("--output={}ta.cer", destination);
-
+        let destination = format!("--output={}/ta.cer", &destination.display().to_string());
+        let source = format!("/ipns/{}", source.get_ta_publish_key());
+        dbg!(&source);
+        dbg!(&destination);
         cmd.arg("get")
-            .arg(source.to_string().clone())
+            .arg(source)
             .arg(destination);
-        info!(
-            "ipfs Running command {:?}", cmd
-        );
+
+        info!("ipfs Running command {:?}", cmd);
+
         Ok(cmd)
     }
 
 
     fn log_output(
-        source: &Cid,
+        source: &String,
         output: process::Output
     ) -> process::ExitStatus {
         if !output.status.success() {
             warn!(
                 "ipfs to retrieve cid {} failed with status {}",
-                source.to_string(), output.status
+                source, output.status
             );
         }
         else {
             info!(
                 "successfully completed {}.",
-                source.to_string(),
+                source,
             );
         }
         // if !output.stderr.is_empty() {

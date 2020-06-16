@@ -21,7 +21,7 @@ use log::{LevelFilter, Log, error};
 #[cfg(unix)] use syslog::Facility;
 use tokio::runtime::Runtime;
 use crate::operation::Error;
-use crate::ipfs::{IpfsPath, IpnsPubkey, Cid};
+use crate::ipfs::{IpfsPath, IpnsPubkey, TalPubkey, KeyName};
 
 
 //------------ Defaults for Some Values --------------------------------------
@@ -214,7 +214,9 @@ pub struct Config {
     /// The init location of ipfs
     pub ipfs_path: Option<IpfsPath>,
 
-    pub ipfs_ta_cer_cid: Option<Cid>,
+    pub tal_pubkey: Option<TalPubkey>,
+
+    pub tal_keyname: Option<KeyName>
 }
 
 
@@ -378,9 +380,17 @@ impl Config {
              .help("Log to this file")
         )
         .arg(Arg::with_name("ipns-pubkey")
-                .long("ipns-pubkey")
-                .help("Hash of IPNS public key to publish to")
-         )
+            .long("ipns-pubkey")
+            .help("Hash of IPNS public key to publish to")
+        )
+        .arg(Arg::with_name("tal-pubkey")
+            .long("tal-pubkey")
+            .help("Hash of public key used for publishing tal")
+        )
+        .arg(Arg::with_name("tal-keyname")
+            .long("tal-keyname")
+            .help("Name of public key used for publishing tal")
+        )
     }
 
     /// Adds the relevant config args to the server subcommand.
@@ -594,9 +604,19 @@ impl Config {
             self.ipfs_path = Some(IpfsPath(PathBuf::from(value)))
         }
 
-        // ta cid
-        if let Some(value) = matches.value_of("ipfs-ta-cer-cid") {
-            self.ipfs_ta_cer_cid = Some(Cid(String::from(value)))
+        // ipns
+        if let Some(value) = matches.value_of("ipns-pubkey") {
+            self.ipns_pubkey = Some(IpnsPubkey(String::from(value)))
+        }
+
+        // tal_pubkey
+        if let Some(value) = matches.value_of("tal-pubkey") {
+            self.tal_pubkey = Some(TalPubkey(String::from(value)))
+        }
+
+        // tal_keyname
+        if let Some(value) = matches.value_of("tal-keyname") {
+            self.tal_keyname = Some(KeyName(String::from(value)))
         }
 
         // rrdp_timeout
@@ -1080,11 +1100,12 @@ impl Config {
             user: file.take_string("user")?,
             group: file.take_string("group")?,
             tal_labels: file.take_string_map("tal-labels")?.unwrap_or_default(),
-            ipns_pubkey: file.take_string("ipns_pubkey").map(|res| res.map(|key| IpnsPubkey(key)))?,
-            ipfs_ta_cer_cid: file
-                .take_string("ipfs_ta_cer_cid")
-                .map(|res| res.map(|cid| Cid(cid)))?,
+            ipns_pubkey: file.take_string("ipns-pubkey").map(|res| res.map(|key| IpnsPubkey(key)))?,
             ipfs_path: file.take_mandatory_path("ipfs-path").map(|res| Some(IpfsPath(res)))?,
+            tal_pubkey: file.take_string("tal-pubkey").map(|res| res.map(|key| TalPubkey(key)))?,
+            tal_keyname: file
+                .take_string("tal-keyname")
+                .map(|res| res.map(|name| KeyName(name)))?
         };
         file.check_exhausted()?;
         Ok(res)
@@ -1219,7 +1240,8 @@ impl Config {
             tal_labels: HashMap::new(),
             ipfs_path: None,
             ipns_pubkey: None,
-            ipfs_ta_cer_cid: None
+            tal_pubkey: None,
+            tal_keyname: None
         }
     }
 
@@ -1368,8 +1390,16 @@ impl Config {
             res.insert("ipfs-path".into(), ipfs_path.value().display().to_string().into());
         }
 
-        if let Some(ref ipfs_ta_cer_cid) = self.ipfs_ta_cer_cid {
-            res.insert("ipfs-ta-cer-cid".into(), ipfs_ta_cer_cid.to_string().into());
+        if let Some(ref ipns_pubkey) = self.ipns_pubkey {
+            res.insert("ipns-pubkey".into(), ipns_pubkey.value().to_string().into());
+        }
+
+        if let Some(ref tal_pubkey) = self.tal_pubkey {
+            res.insert("tal-pubkey".into(), tal_pubkey.value().to_string().into());
+        }
+
+        if let Some(ref tal_keyname) = self.tal_keyname {
+            res.insert("tal-keyname".into(), tal_keyname.to_string().into());
         }
 
         if let Some(timeout) = self.rrdp_timeout {

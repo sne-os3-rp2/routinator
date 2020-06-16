@@ -157,40 +157,6 @@ impl<'a> Run<'a> {
         self.running.write().unwrap().remove(module);
     }
 
-    pub fn load_file(
-        &self,
-        uri: &uri::Rsync,
-    ) -> Option<Bytes> {
-        let path = self.cache.cache_dir.uri_path(uri);
-        match fs::File::open(&path) {
-            Ok(mut file) => {
-                let mut data = Vec::new();
-                if let Err(err) = io::Read::read_to_end(&mut file, &mut data) {
-                    warn!(
-                        "Failed to read file '{}': {}",
-                        path.display(),
-                        err
-                    );
-                    None
-                }
-                else {
-                    Some(data.into())
-                }
-            }
-            Err(err) => {
-                if err.kind() == io::ErrorKind::NotFound {
-                    info!("{}: not found in local repository", uri);
-                } else {
-                    warn!(
-                        "Failed to open file '{}': {}",
-                        path.display(), err
-                    );
-                }
-                None
-            }
-        }
-    }
-
     pub fn cleanup(&self) {
         if self.cache.command.is_none() {
             return
@@ -550,11 +516,6 @@ impl CacheDir {
         res
     }
 
-    fn uri_path(&self, uri: &uri::Rsync) -> PathBuf {
-        let mut res = self.module_path(uri.module());
-        res.push(uri.path());
-        res
-    }
 }
 
 

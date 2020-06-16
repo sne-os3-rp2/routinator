@@ -20,14 +20,13 @@ use rpki::crl::{Crl, CrlStore};
 use rpki::crypto::KeyIdentifier;
 use rpki::manifest::{Manifest, ManifestContent, ManifestHash};
 use rpki::roa::{Roa, RoaStatus};
-use rpki::tal::{Tal, TalInfo, TalUri};
+use rpki::tal::{Tal, TalUri};
 use rpki::x509::ValidationError;
 use crate::{rrdp, rsync, ipfs};
 use crate::config::{Config, StalePolicy};
 use crate::metrics::Metrics;
 use crate::operation::Error;
 use crate::origins::{OriginsReport, RouteOrigins};
-use crate::ipfs::{IpnsPubkey, IpfsPath};
 
 
 //------------ Configuration -------------------------------------------------
@@ -111,7 +110,7 @@ impl Repository {
     /// updating the local cache will not be updated from upstream.
     pub fn new(
         config: &Config,
-        update: bool
+        update: bool,
     ) -> Result<Self, Error> {
         if let Err(err) = fs::read_dir(&config.cache_dir) {
             if err.kind() == io::ErrorKind::NotFound {
@@ -119,16 +118,15 @@ impl Repository {
                     "Missing repository directory {}.\n\
                      You may have to initialize it via \
                      \'routinator init\'.",
-                     config.cache_dir.display()
+                    config.cache_dir.display()
                 );
-            }
-            else {
+            } else {
                 error!(
                     "Failed to open repository directory {}: {}",
                     config.cache_dir.display(), err
                 );
             }
-            return Err(Error)
+            return Err(Error);
         }
 
         Ok(Repository {
@@ -138,7 +136,7 @@ impl Repository {
             stale: config.stale,
             validation_threads: config.validation_threads,
             rrdp: rrdp::Cache::new(config, update)?,
-            rsync: rsync::Cache::new( config, update)?,
+            rsync: rsync::Cache::new(config, update)?,
             ipfs: ipfs::Cache::new(config, update)?,
             dirty_repository: config.dirty_repository,
         })
@@ -161,13 +159,12 @@ impl Repository {
                         "Missing TAL directory {}.\n\
                          You may have to initialize it via \
                          \'routinator init\'.",
-                         config.tal_dir.display()
+                        config.tal_dir.display()
                     );
-                }
-                else {
+                } else {
                     error!("Failed to open TAL directory: {}.", err);
                 }
-                return Err(Error)
+                return Err(Error);
             }
         };
         for entry in dir {
@@ -178,17 +175,17 @@ impl Repository {
                         "Failed to iterate over tal directory: {}",
                         err
                     );
-                    return Err(Error)
+                    return Err(Error);
                 }
             };
 
             if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-                continue
+                continue;
             }
 
             let path = entry.path();
             if path.extension().map(|ext| ext != "tal").unwrap_or(true) {
-                continue
+                continue;
             }
 
             let mut file = match File::open(&path) {
@@ -199,14 +196,14 @@ impl Repository {
                     error!(
                         "Failed to open TAL {}: {}. \n\
                          Aborting.",
-                         path.display(), err
+                        path.display(), err
                     );
-                    return Err(Error)
+                    return Err(Error);
                 }
             };
             let tal = match Tal::read_named(
                 Self::path_to_label(&path, config),
-                &mut file
+                &mut file,
             ) {
                 Ok(tal) => tal,
                 Err(err) => {
@@ -215,7 +212,7 @@ impl Repository {
                          Aborting.",
                         path.display(), err
                     );
-                    return Err(Error)
+                    return Err(Error);
                 }
             };
             res.push(tal);
@@ -232,7 +229,7 @@ impl Repository {
     fn path_to_label(path: &Path, config: &Config) -> String {
         if let Some(name) = path.file_name().unwrap().to_str() {
             if let Some(label) = config.tal_labels.get(name) {
-                return label.clone()
+                return label.clone();
             }
         }
         path.file_stem().unwrap().to_string_lossy().into_owned()
@@ -278,20 +275,17 @@ impl<'a> Run<'a> {
             repository,
             rsync: if let Some(ref rsync) = repository.rsync {
                 Some(rsync.start()?)
-            }
-            else {
+            } else {
                 None
             },
-            rrdp: if let Some(ref rrdp) = repository.rrdp { 
+            rrdp: if let Some(ref rrdp) = repository.rrdp {
                 Some(rrdp.start()?)
-            }
-            else {
+            } else {
                 None
             },
             ipfs: if let Some(ref ipfs) = repository.ipfs {
                 Some(ipfs.start()?)
-            }
-            else {
+            } else {
                 None
             },
             metrics: Metrics::new(),
@@ -304,7 +298,7 @@ impl<'a> Run<'a> {
     ) -> Result<OriginsReport, Error> {
         // If we don’t have any TALs, we just return an empty report.
         if self.repository.tals.is_empty() {
-            return Ok(OriginsReport::new())
+            return Ok(OriginsReport::new());
         }
 
         // Stick all TALs into a queue. The worker threads will take one after
@@ -327,12 +321,12 @@ impl<'a> Run<'a> {
                         match task {
                             ValidationTask::Tal { tal, index } => {
                                 self.process_tal(
-                                    tal, index, &mut origins, &tasks
+                                    tal, index, &mut origins, &tasks,
                                 );
                             }
-                            ValidationTask::Ca { cert, uri } => {
+                            ValidationTask::Ca { cert, uri, ipns_uri } => {
                                 self.process_ca(
-                                    cert, &uri, &mut origins, &tasks
+                                    cert, &uri, &mut origins, &ipns_uri, &tasks,
                                 )
                             }
                         }
@@ -354,7 +348,7 @@ impl<'a> Run<'a> {
             self.repository.validation_threads,
             self.repository.tals.iter().map(|tal| {
                 tal.info().clone()
-            }).collect()
+            }).collect(),
         );
         while let Ok(item) = origins_queue.pop() {
             // If item is an Err, something went wrong fatally in the worker
@@ -378,7 +372,8 @@ impl<'a> Run<'a> {
         tasks: &SegQueue<ValidationTask>,
     ) {
         for uri in tal.uris() {
-            let cert = match self.load_ta(&uri, tal.info()) {
+            // Load the ta.cer from the tal
+            let cert = match self.load_ta(&uri) {
                 Some(cert) => cert,
                 _ => continue,
             };
@@ -401,8 +396,8 @@ impl<'a> Run<'a> {
                 }
             };
             info!("Found valid trust anchor {}. Processing.", uri);
-            self.process_ca(CaCert::root(cert, index), &uri, origins, tasks);
-            return
+            self.process_ca(CaCert::root(cert, index), &uri, origins, &Some(uri.clone()), tasks);
+            return;
         }
         warn!("No valid trust anchor for TAL {}", tal.info().name());
     }
@@ -410,48 +405,42 @@ impl<'a> Run<'a> {
     /// Loads a trust anchor certificate from the given URI.
     fn load_ta(
         &self,
-        uri: &TalUri,
-        info: &TalInfo,
+        uri: &TalUri
     ) -> Option<Cert> {
         match *uri {
-            // DA TODO update TAL to have the cid of certificate
-            TalUri::Rsync(ref uri) => {
-                // If IPFS is configured, used that, if not fall back to rsync
+            TalUri::Ipns(ref uri) => {
                 self.ipfs.as_ref().and_then(|ipfs| {
-                    // rsync file
+                    // fetch from ipfs
                     ipfs.load_ta(uri);
-                    self.load_file(None, uri)
-                }).or(self.rsync.as_ref().and_then(|rsync| {
-                    // rsync file
-                    rsync.load_module(uri);
                     // return file
-                    self.load_file(None, uri)
-                }))
-            }
-            TalUri::Https(ref uri) => {
-                self.rrdp.as_ref().and_then(|rrdp| rrdp.load_ta(uri, info))
-            }
+                    self.load_file_from_local_ipfs(uri)
+                })
+            },
+            _ => None
         }.and_then(|bytes| Cert::decode(bytes).ok())
     }
 
-    /// Loads the content of a file from the given URI.
-    fn load_file(
+    fn load_file_from_ipfs_cache(
         &self,
-        rrdp_server: Option<rrdp::ServerId>,
-        uri: &uri::Rsync,
+        tal_uri: &Option<TalUri>,
+        rsync_uri: &uri::Rsync,
     ) -> Option<Bytes> {
-        if let Some(id) = rrdp_server {
-            if let Some(rrdp) = self.rrdp.as_ref() {
-                if let Ok(res) = rrdp.load_file(id, uri) {
-                    return res
-                }
-            }
+        if let TalUri::Ipns(ipns) = tal_uri.as_ref().unwrap() {
+            self.ipfs.as_ref().and_then(|ipfs| ipfs.do_load_file_from_cache(rsync_uri, ipns))
+        } else {
+            None
         }
-        // load file from ipfs cache, fall back to rsync cache
-        self.ipfs.as_ref()
-            .and_then(|ipfs| ipfs.load_file(uri))
-            .or(self.rsync.as_ref().and_then(|rsync| rsync.load_file(uri)))
     }
+
+    /// Loads the content of a file from the given URI.
+    fn load_file_from_local_ipfs(
+        &self,
+        uri: &uri::Ipns,
+    ) -> Option<Bytes> {
+        // load file from ipfs cache
+        self.ipfs.as_ref().and_then(|ipfs| ipfs.load_ta_file_from_cache(uri))
+    }
+
 
     /// Processes all data for the given trust CA.
     /// 
@@ -464,31 +453,36 @@ impl<'a> Run<'a> {
         cert: Arc<CaCert>,
         uri: &U,
         routes: &mut RouteOrigins,
+        tal_uri: &Option<TalUri>,
         tasks: &SegQueue<ValidationTask>,
     ) {
         let repo_uri = match cert.ca_repository() {
             Some(uri) => uri,
             None => {
                 info!("CA cert {} has no repository URI. Ignoring.", uri);
-                return
+                return;
             }
         };
-        let rrdp_server = cert.rpki_notify().and_then(|uri| {
-            self.rrdp.as_ref().and_then(|rrdp| rrdp.load_server(uri))
-        });
-        if rrdp_server.is_none() {
-            // use ipfs, fall back to rsync
-            self.ipfs.as_ref()
-                .map(|ipfs| {
-                    let ipns_pubkey = ipfs.cache().ipns_pubkey().expect("ipns key not provided");
-                    let ipfs_path = ipfs.cache().ipfs_path().expect("ipfs path not provided");
-                    ipfs.sync(&ipns_pubkey, &ipfs_path, repo_uri)
-                }).or(self.rsync.as_ref().map(|rsync| {
-                rsync.load_module(repo_uri)
-            }));
-        }
+
+        let ipfs = self.ipfs.as_ref().unwrap();
+        let ipfs_path = ipfs
+            .cache()
+            .ipfs_path()
+            .expect("ipfs path not provided");
+
+        match tal_uri {
+            Some(value) => {
+                if let TalUri::Ipns(uri) = value {
+                    ipfs.sync(&ipfs_path, uri)
+                }
+            }
+            None => {
+                println!("this should not happen")
+            }
+        };
+
         let (store, manifest) = match self.get_manifest(
-            rrdp_server, &cert, uri, &repo_uri, routes,
+            &cert, uri, &tal_uri, repo_uri, routes,
         ) {
             Some(some) => some,
             None => return,
@@ -496,7 +490,7 @@ impl<'a> Run<'a> {
 
         for (uri, hash) in manifest.iter_uris(repo_uri) {
             self.process_object(
-                rrdp_server, uri, hash, &cert, &store, routes, tasks
+                uri, hash, &cert, &store, routes, tal_uri, tasks,
             );
         }
     }
@@ -510,20 +504,20 @@ impl<'a> Run<'a> {
     /// If no manifest can be found, `None` is returned.
     fn get_manifest<U: fmt::Display>(
         &self,
-        rrdp_server: Option<rrdp::ServerId>,
         issuer: &ResourceCert,
         issuer_uri: &U,
+        tal_uri: &Option<TalUri>,
         repo_uri: &uri::Rsync,
-        routes: &mut RouteOrigins
+        routes: &mut RouteOrigins,
     ) -> Option<(CrlStore, ManifestContent)> {
         let uri = match issuer.rpki_manifest() {
             Some(uri) => uri,
             None => {
                 info!("{}: No valid manifest found. Ignoring.", issuer_uri);
-                return None
+                return None;
             }
         };
-        let bytes = match self.load_file(rrdp_server, &uri) {
+        let bytes = match self.load_file_from_ipfs_cache(tal_uri, &uri) {
             Some(bytes) => bytes,
             None => {
                 info!("{}: failed to load.", uri);
@@ -538,7 +532,7 @@ impl<'a> Run<'a> {
             }
         };
         let (cert, manifest) = match manifest.validate(
-            issuer, self.repository.strict
+            issuer, self.repository.strict,
         ) {
             Ok(manifest) => manifest,
             Err(_) => {
@@ -556,21 +550,21 @@ impl<'a> Run<'a> {
                 StalePolicy::Warn => {
                     warn!("{}: stale manifest", uri);
                 }
-                StalePolicy::Accept => { }
+                StalePolicy::Accept => {}
             }
         }
         let mft_crl = match self.check_manifest_crl(
-            rrdp_server, &cert, issuer
+            &cert, tal_uri, issuer,
         ) {
             Ok(some) => some,
             Err(_) => {
                 info!("{}: certificate has been revoked", uri);
-                return None
+                return None;
             }
         };
 
         let store = self.store_manifest_crls(
-            rrdp_server, issuer, &manifest, repo_uri, mft_crl
+            tal_uri, issuer, &manifest, repo_uri,  mft_crl,
         );
 
         routes.update_refresh(&cert);
@@ -591,31 +585,27 @@ impl<'a> Run<'a> {
     #[allow(clippy::too_many_arguments)]
     fn process_object(
         &self,
-        rrdp_server: Option<rrdp::ServerId>,
         uri: uri::Rsync,
         hash: ManifestHash,
         issuer: &Arc<CaCert>,
         crl: &CrlStore,
         routes: &mut RouteOrigins,
+        tal_uri: &Option<TalUri>,
         tasks: &SegQueue<ValidationTask>,
     ) {
         if uri.ends_with(".cer") {
             self.process_cer(
-                rrdp_server, uri, hash, issuer, crl, routes, tasks
+                uri, hash, issuer, crl, routes, tal_uri, tasks,
             )
-        }
-        else if uri.ends_with(".roa") {
+        } else if uri.ends_with(".roa") {
             self.process_roa(
-                rrdp_server, uri, hash, issuer, crl, routes,
+                tal_uri, uri, hash, issuer, crl, routes,
             )
-        }
-        else if uri.ends_with(".crl") {
+        } else if uri.ends_with(".crl") {
             // CRLs are read on demand.
-        }
-        else if uri.ends_with(".gbr") {
+        } else if uri.ends_with(".gbr") {
             info!("{}: Unsupported file type", uri)
-        }
-        else {
+        } else {
             info!("{}: Unknown file type.", uri);
         }
     }
@@ -623,30 +613,30 @@ impl<'a> Run<'a> {
     #[allow(clippy::too_many_arguments)]
     fn process_cer(
         &self,
-        rrdp_server: Option<rrdp::ServerId>,
         uri: uri::Rsync,
         hash: ManifestHash,
         issuer: &Arc<CaCert>,
         crl_store: &CrlStore,
         routes: &mut RouteOrigins,
+        tal_uri: &Option<TalUri>,
         tasks: &SegQueue<ValidationTask>,
     ) {
-        let bytes = match self.load_file(rrdp_server, &uri) {
+        let bytes = match self.load_file_from_ipfs_cache(&tal_uri, &uri) {
             Some(bytes) => bytes,
             None => {
                 info!("{}: failed to load.", uri);
-                return
+                return;
             }
         };
         if hash.verify(&bytes).is_err() {
             info!("{}: file has wrong hash.", uri);
-            return
+            return;
         }
         let cert = match Cert::decode(bytes) {
             Ok(cert) => cert,
             Err(_) => {
                 info!("{}: failed to decode.", uri);
-                return
+                return;
             }
         };
         if cert.key_usage() != KeyUsage::Ca {
@@ -654,25 +644,25 @@ impl<'a> Run<'a> {
                 "{}: probably a router key. Ignoring.",
                 uri
             );
-            return
+            return;
         }
         if issuer.check_loop(&cert).is_err() {
             warn!(
                 "{}: certificate loop detected. Ignoring this CA.",
                 uri
             );
-            return
+            return;
         }
         let cert = match cert.validate_ca(issuer, self.repository.strict) {
             Ok(cert) => cert,
             Err(_) => {
                 info!("{}: failed to validate.", uri);
-                return
+                return;
             }
         };
         if self.check_crl(&cert, crl_store).is_err() {
             info!("{}: certificate has been revoked", uri);
-            return
+            return;
         }
         routes.update_refresh(&cert);
 
@@ -680,7 +670,7 @@ impl<'a> Run<'a> {
             Some(uri) => uri,
             None => {
                 info!("CA cert {} has no repository URI. Ignoring.", uri);
-                return
+                return;
             }
         };
 
@@ -698,39 +688,38 @@ impl<'a> Run<'a> {
 
         if defer {
             debug!("Queueing CA {} for later processing.", uri);
-            tasks.push(ValidationTask::Ca { cert, uri });
-        }
-        else {
-            self.process_ca( cert, &uri, routes, tasks)
+            tasks.push(ValidationTask::Ca { cert, uri, ipns_uri: tal_uri.clone() });
+        } else {
+            self.process_ca(cert, &uri, routes, tal_uri, tasks)
         }
     }
 
     #[allow(clippy::too_many_arguments)]
     fn process_roa(
         &self,
-        rrdp_server: Option<rrdp::ServerId>,
+        tal_uri: &Option<TalUri>,
         uri: uri::Rsync,
         hash: ManifestHash,
         issuer: &Arc<CaCert>,
         crl: &CrlStore,
         routes: &mut RouteOrigins,
     ) {
-        let bytes = match self.load_file(rrdp_server, &uri) {
+        let bytes = match self.load_file_from_ipfs_cache(&tal_uri, &uri) {
             Some(bytes) => bytes,
             None => {
                 info!("{}: failed to load.", uri);
-                return
+                return;
             }
         };
         if hash.verify(&bytes).is_err() {
             info!("{}: file has wrong hash.", uri);
-            return
+            return;
         }
         let roa = match Roa::decode(bytes, self.repository.strict) {
             Ok(roa) => roa,
             Err(_) => {
                 info!("{}: decoding failed.", uri);
-                return
+                return;
             }
         };
         let mut extra = None;
@@ -767,11 +756,10 @@ impl<'a> Run<'a> {
             Some(crl) => {
                 if crl.contains(cert.serial_number()) {
                     Err(ValidationError)
-                }
-                else {
+                } else {
                     Ok(())
                 }
-            },
+            }
             None => {
                 Err(ValidationError)
             }
@@ -785,8 +773,8 @@ impl<'a> Run<'a> {
     /// also used with other objects mentioned by the manifest.
     fn check_manifest_crl(
         &self,
-        rrdp_server: Option<rrdp::ServerId>,
         cert: &TbsCert,
+        tal_uri: &Option<TalUri>,
         issuer: &ResourceCert,
     ) -> Result<(uri::Rsync, Bytes, Crl), ValidationError> {
         // Let’s be strict here: If there is no CRL URI, the certificate is
@@ -795,11 +783,10 @@ impl<'a> Run<'a> {
             Some(some) => some.clone(),
             None => return Err(ValidationError)
         };
-        let (bytes, crl) = self.load_crl(rrdp_server, &uri, issuer)?;
+        let (bytes, crl) = self.load_crl(&tal_uri, &uri, issuer)?;
         if crl.contains(cert.serial_number()) {
             Err(ValidationError)
-        }
-        else {
+        } else {
             Ok((uri, bytes, crl))
         }
     }
@@ -809,7 +796,7 @@ impl<'a> Run<'a> {
     /// Invalid manifests are discarded.
     fn store_manifest_crls(
         &self,
-        rrdp_server: Option<rrdp::ServerId>,
+        tal_uri: &Option<TalUri>,
         issuer: &ResourceCert,
         manifest: &ManifestContent,
         repo_uri: &uri::Rsync,
@@ -823,18 +810,17 @@ impl<'a> Run<'a> {
         for item in manifest.iter() {
             let (file, hash) = item.into_pair();
             if !file.ends_with(b".crl") {
-                continue
+                continue;
             }
             let uri = repo_uri.join(&file);
 
             let (bytes, crl) = if
-                mft_crl.as_ref().map(|x| x.0 == uri).unwrap_or(false)
+            mft_crl.as_ref().map(|x| x.0 == uri).unwrap_or(false)
             {
                 let mft_crl = mft_crl.take().unwrap();
                 (mft_crl.1, mft_crl.2)
-            }
-            else {
-                match self.load_crl(rrdp_server, &uri, issuer) {
+            } else {
+                match self.load_crl(&tal_uri, &uri, issuer) {
                     Ok(some) => some,
                     Err(_) => continue
                 }
@@ -842,7 +828,7 @@ impl<'a> Run<'a> {
             let hash = ManifestHash::new(hash, manifest.file_hash_alg());
             if hash.verify(&bytes).is_err() {
                 info!("{}: file has wrong hash.", uri);
-                continue
+                continue;
             }
             store.push(uri, crl)
         }
@@ -852,11 +838,11 @@ impl<'a> Run<'a> {
     /// Loads and validates the given CRL.
     fn load_crl(
         &self,
-        rrdp_server: Option<rrdp::ServerId>,
+        tal_uri: &Option<TalUri>,
         uri: &uri::Rsync,
         issuer: &ResourceCert,
     ) -> Result<(Bytes, Crl), ValidationError> {
-        let bytes = match self.load_file(rrdp_server, &uri) {
+        let bytes = match self.load_file_from_ipfs_cache(&tal_uri, &uri) {
             Some(bytes) => bytes,
             _ => return Err(ValidationError),
         };
@@ -865,19 +851,19 @@ impl<'a> Run<'a> {
             Err(_) => return Err(ValidationError)
         };
         if crl.validate(issuer.subject_public_key_info()).is_err() {
-            return Err(ValidationError)
+            return Err(ValidationError);
         }
         if crl.is_stale() {
             self.metrics.inc_stale_count();
             match self.repository.stale {
                 StalePolicy::Reject => {
                     info!("{}: stale CRL.", uri);
-                    return Err(ValidationError)
+                    return Err(ValidationError);
                 }
                 StalePolicy::Warn => {
                     warn!("{}: stale CRL.", uri);
                 }
-                StalePolicy::Accept => { }
+                StalePolicy::Accept => {}
             }
         }
         Ok((bytes, crl))
@@ -885,7 +871,7 @@ impl<'a> Run<'a> {
 
     pub fn cleanup(&self) {
         if self.repository.dirty_repository {
-            return
+            return;
         }
         if let Some(ref rsync) = self.rsync {
             rsync.cleanup();
@@ -901,7 +887,7 @@ impl<'a> Run<'a> {
             Ok(dir) => dir,
             Err(err) => {
                 warn!("Failed to read repository directory: {}", err);
-                return
+                return;
             }
         };
         for entry in dir {
@@ -911,7 +897,7 @@ impl<'a> Run<'a> {
                     warn!(
                         "Failed to iterate over repository directory: {}", err
                     );
-                    return
+                    return;
                 }
             };
             match entry.file_name().to_str() {
@@ -919,7 +905,7 @@ impl<'a> Run<'a> {
                 Some("rsync") => continue,
                 Some("rrdp") => continue,
                 Some("tmp") => continue,
-                _ => { }
+                _ => {}
             }
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 if let Err(err) = fs::remove_dir_all(entry.path()) {
@@ -929,8 +915,7 @@ impl<'a> Run<'a> {
                         err
                     );
                 }
-            }
-            else if let Err(err) = fs::remove_file(entry.path()) {
+            } else if let Err(err) = fs::remove_file(entry.path()) {
                 warn!(
                     "Failed to delete unused repository entry {}:{}",
                     entry.path().display(),
@@ -975,7 +960,7 @@ impl CaCert {
         Arc::new(CaCert {
             cert,
             parent: None,
-            tal
+            tal,
         })
     }
 
@@ -983,7 +968,7 @@ impl CaCert {
         Arc::new(CaCert {
             cert,
             parent: Some(this.clone()),
-            tal: this.tal
+            tal: this.tal,
         })
     }
 
@@ -999,15 +984,13 @@ impl CaCert {
     fn _check_loop(&self, key_id: KeyIdentifier) -> Result<(), Error> {
         if self.cert.subject_key_identifier() == key_id {
             Err(Error)
-        }
-        else if let Some(ref parent) = self.parent {
+        } else if let Some(ref parent) = self.parent {
             parent._check_loop(key_id)
-        }
-        else {
+        } else {
             Ok(())
         }
     }
-} 
+}
 
 impl ops::Deref for CaCert {
     type Target = ResourceCert;
@@ -1026,6 +1009,10 @@ enum ValidationTask<'a> {
     Tal { tal: &'a Tal, index: usize },
 
     /// Process the given CA.
-    Ca { cert: Arc<CaCert>, uri: uri::Rsync },
+    Ca {
+        cert: Arc<CaCert>,
+        uri: uri::Rsync,
+        ipns_uri: Option<TalUri>,
+    },
 }
 
