@@ -45,11 +45,9 @@ fi
 # Second guard rail to ensure a private network
 ipfs bootstrap rm --all
 
-# if node is bootnode then output the peerId
-echo $(ls -lh /usr/local/nexus)
-echo $(ls -lh /usr/local/nexus/peerid)
-echo $(whoami)
-cat /dev/null > /usr/local/nexus/peerid
+
+echo "Running as $(whoami)"
+
 
 if [ ! -z "$IS_BOOTNODE" ] ; then
      echo "Copying peer id of boot node..."
