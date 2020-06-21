@@ -53,6 +53,7 @@ if [ ! -z "$IS_BOOTNODE" ] ; then
      echo "Copying peer id of boot node..."
      PEER_ID=$(ipfs id | grep "ID" | cut -d ':' -f 2 | sed 's/.$//' | tr -d '"' | tr -d " ")
      echo "Peer ID ${PEER_ID} generated"
+     cat /dev/null > /usr/local/nexus/peerid
      echo $PEER_ID > /usr/local/nexus/peerid
      echo "Saved peer ID of bootnode as:"
      echo $(cat /usr/local/nexus/peerid)

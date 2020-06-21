@@ -150,7 +150,7 @@ pub struct Run<'a> {
     cache: &'a Cache,
     updated: RwLock<HashSet<uri::RsyncModule>>,
     running: RwLock<HashMap<uri::RsyncModule, Arc<Mutex<()>>>>,
-    metrics: Mutex<Vec<IpfsModuleMetrics>> //TODO DA: Add IPS module
+    metrics: Mutex<Vec<IpfsModuleMetrics>>
 }
 
 impl<'a> Run<'a>  {
@@ -177,11 +177,17 @@ impl<'a> Run<'a>  {
 
         let destination = format!("--output={}", destination.display().to_string());
 
+        let start_time = SystemTime::now();
+
         let result = std::process::Command::new("ipfs")
             .arg("get")
             .arg(source)
             .arg(destination)
             .output().expect("could not sync ipfs");
+
+        for metric in self.metrics.lock().unwrap().iter_mut() {
+            metric.duration = SystemTime::now().duration_since(start_time);
+        }
 
         println!("Finished syncing IPFS...");
         env::set_var("IPFS_PATH", "");
@@ -270,6 +276,10 @@ impl<'a> Run<'a>  {
                 None
             }
         }
+    }
+
+    pub fn into_metrics(self) -> Vec<IpfsModuleMetrics> {
+        self.metrics.into_inner().unwrap()
     }
 
 }

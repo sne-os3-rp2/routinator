@@ -933,6 +933,9 @@ impl<'a> Run<'a> {
         if let Some(rsync) = self.rsync {
             res.set_rsync(rsync.into_metrics());
         }
+        if let Some(ipfs) = self.ipfs {
+            res.set_ipfs(ipfs.into_metrics())
+        }
         res
     }
 }

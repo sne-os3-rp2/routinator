@@ -26,6 +26,9 @@ pub struct Metrics {
     /// RRDP metrics.
     rrdp: Vec<RrdpServerMetrics>,
 
+    /// IPFS metrics,
+    ipfs: Vec<IpfsModuleMetrics>,
+
     /// Number of stale objects.
     stale_count: AtomicU64,
 }
@@ -37,6 +40,7 @@ impl Metrics {
             tals: Vec::new(),
             rsync: Vec::new(),
             rrdp: Vec::new(),
+            ipfs: Vec::new(),
             stale_count: AtomicU64::new(0),
         }
     }
@@ -67,6 +71,11 @@ impl Metrics {
         self.rrdp = rrdp
     }
 
+    pub fn set_ipfs(&mut self,
+    ipfs: Vec<IpfsModuleMetrics>) {
+        self.ipfs = ipfs;
+    }
+
     pub fn time(&self) -> DateTime<Utc> {
         self.time
     }
@@ -85,6 +94,10 @@ impl Metrics {
 
     pub fn rsync(&self) -> &[RsyncModuleMetrics] {
         &self.rsync
+    }
+
+    pub fn ipfs(&self) -> &[IpfsModuleMetrics] {
+        &self.ipfs
     }
 
     pub fn rrdp(&self) -> &[RrdpServerMetrics] {

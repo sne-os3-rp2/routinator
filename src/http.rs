@@ -314,6 +314,43 @@ fn metrics_active(
         }
     }
 
+
+    // ipfs_status
+    writeln!(res, "
+        \n\
+        # HELP routinator_ipfs_status exit status of ipfs command\n\
+        # TYPE routinator_ipfs_status gauge"
+    ).unwrap();
+    for metrics in metrics.ipfs() {
+        writeln!(
+            res,
+            "routinator_ipfs_status{{uri=\"{}\"}} {}",
+            metrics.ipns,
+            match metrics.status {
+                Ok(status) => status.code().unwrap_or(-1),
+                Err(_) => -1
+            }
+        ).unwrap();
+    }
+
+    // ipfs_duration
+    writeln!(res, "
+        \n\
+        # HELP routinator_ipfs_duration duration of ipfs in seconds\n\
+        # TYPE routinator_ipfs_duration gauge"
+    ).unwrap();
+    for metrics in metrics.ipfs() {
+        if let Ok(duration) = metrics.duration {
+            writeln!(
+                res,
+                "routinator_ipfs_duration{{uri=\"{}\"}} {:.3}",
+                metrics.ipns,
+                duration.as_secs() as f64
+                    + f64::from(duration.subsec_millis()) / 1000.
+            ).unwrap();
+        }
+    }
+
     // rtr_connections
     writeln!(res, "
         \n\
