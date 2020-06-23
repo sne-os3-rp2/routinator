@@ -583,6 +583,31 @@ fn status_active(
         }
     }
 
+    // ipfs status
+    writeln!(res, "ipfs-durations:").unwrap();
+    for metrics in metrics.ipfs() {
+        write!(
+            res,
+            "   {}: status={}",
+            metrics.ipns,
+            match metrics.status {
+                Ok(status) => status.code().unwrap_or(-1),
+                Err(_) => -1
+            }
+        ).unwrap();
+        if let Ok(duration) = metrics.duration {
+            writeln!(
+                res,
+                ", duration={:.3}s",
+                duration.as_secs() as f64
+                    + f64::from(duration.subsec_millis()) / 1000.
+            ).unwrap();
+        }
+        else {
+            writeln!(res).unwrap()
+        }
+    }
+
     // rtr
     writeln!(res,
         "rtr-connections: {} current, {} total",
